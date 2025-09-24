@@ -1,0 +1,49 @@
+name: build and publish
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+env:
+  KO_DOCKER_REPO: ${{ github.event_name == 'pull_request' && 'ko.local' || secrets.GAR_REPO }}
+  CONTAINER_TAGS: 'latest'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: ${{ github.event_name == 'push' && 'publish' || '' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+      - uses: ko-build/setup-ko@v0.9
+
+      - if: ${{ github.event_name == 'push' }}
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          token_format: 'access_token'
+          project_id: '${{ secrets.GOOGLE_PROJECT_ID }}'
+          workload_identity_provider: '${{ secrets.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}'
+          service_account: '${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}'
+      - if: ${{ github.event_name == 'push' }}
+        uses: docker/login-action@v3
+        with:
+          registry: asia-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - if: ${{ github.event_name == 'push' }}
+        name: get container tags
+        run: |
+          GIT_TAG=${{ github.ref_name }}
+          echo "CONTAINER_TAGS=latest,${GIT_TAG#v}" >> $GITHUB_ENV
+
+      - name: Build and push OCI image
+        run: ko build --base-import-paths --tags '${{ env.CONTAINER_TAGS }}' ./cmd/*
